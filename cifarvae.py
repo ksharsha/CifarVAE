@@ -4,20 +4,23 @@ import input_data
 import matplotlib.pyplot as plt
 import os
 from scipy.misc import imsave as ims
-from utils import *
 from ops import *
 from CIFAR.cifarDataLoader import maybe_download_and_extract
 from cifar import catsanddogs
 import keras
+from keras.layers import (Activation, Convolution2D,  Dense, Flatten, Input,
+                          Permute, Lambda)
+from keras.layers.convolutional import Conv2D, Conv2DTranspose
+from keras.models import Model, Sequential, load_model
+from keras.optimizers import Adam
 
 class LatentAttention():
     def __init__(self):
         maybe_download_and_extract()
-        self.mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
-        self.n_samples = self.mnist.train.num_examples
-
+        
+        writer = tf.summary.FileWriter('logs', graph=tf.get_default_graph())
         self.n_hidden = 500
-        self.n_z = 2
+        self.n_z = 100
         self.batchsize = 100
 
         self.images = tf.placeholder(tf.float32, [None, 32,32,3])
@@ -26,108 +29,62 @@ class LatentAttention():
         self.guessed_z = z_mean + (z_stddev * samples)
 
         self.generated_images = self.generation(self.guessed_z)
-        generated_flat = tf.reshape(self.generated_images, [self.batchsize, 32,32,3])
+        print('The shape of the generated images are', self.generated_images.shape)
+        original_flat = tf.reshape(self.images, [self.batchsize, 32*32*3]) 
+        generated_flat = tf.reshape(self.generated_images, [self.batchsize, 32*32*3])
 
-        self.generation_loss = -tf.reduce_sum(np.sum(abs(self.images - self.generated_images)),1) #Added the MSE loss
+        self.generation_loss = (tf.reduce_sum(abs(original_flat - generated_flat),1)) #Added the MSE loss
         self.latent_loss = 0.5 * tf.reduce_sum(tf.square(z_mean) + tf.square(z_stddev) - tf.log(tf.square(z_stddev)) - 1,1)
+        tf.summary.image("Generated Image", self.generated_images, max_outputs=2)
+        tf.summary.scalar("GenerationLoss", tf.reduce_mean(self.generation_loss))
+        tf.summary.scalar("latentLoss", tf.reduce_mean(self.latent_loss))
         self.cost = tf.reduce_mean(self.generation_loss + self.latent_loss)
+        tf.summary.scalar("TotalLoss", self.cost)
         self.optimizer = tf.train.AdamOptimizer(0.001).minimize(self.cost)
 
 
     # encoder
     def recognition(self, input_images):
         with tf.variable_scope("recognition"):
-            h1 = lrelu(conv2d(input_images, 1, 16, "d_h1")) # 28x28x1 -> 14x14x16
-            h2 = lrelu(conv2d(h1, 16, 32, "d_h2")) # 14x14x16 -> 7x7x32
-            h2_flat = tf.reshape(h2,[self.batchsize, 8*8*32])
-
-            w_mean = dense(h2_flat, 8*8*32, self.n_z, "w_mean")
-            w_stddev = dense(h2_flat, 8*8*32, self.n_z, "w_stddev")
-
+            input_shapes=(32,32,3)
+            inputs = Input(shape=input_shapes)
+            model = Sequential()
+            c1=Convolution2D(filters=16,kernel_size=(3, 3),strides=2, padding = 'same',activation='relu')(input_images)
+            c2=Convolution2D(filters=32,kernel_size=(3, 3),strides=2, padding = 'same',activation='relu')(c1)
+            f1=Flatten()(c2)
+            fc1=Dense(8*8*32, activation='relu')(f1)
+            w_mean = Dense(self.n_z)(fc1)
+            w_stddev = Dense(self.n_z)(fc1) 
         return w_mean, w_stddev
 
     # decoder
     def generation(self, z):
         with tf.variable_scope("generation"):
-            z_develop = dense(z, self.n_z, 8*8*32, scope='z_matrix')
-            z_matrix = tf.nn.relu(tf.reshape(z_develop, [self.batchsize, 8, 8, 32]))
-            h1 = tf.nn.relu(conv_transpose(z_matrix, [self.batchsize, 16, 16, 16], "g_h1"))
-            h2 = conv_transpose(h1, [self.batchsize, 32, 32, 3], "g_h2")
-            h2 = tf.nn.sigmoid(h2)
-
-        return h2
+            fc1=Dense(500, activation='relu')(z)
+            fc2=Dense(8*8*32, activation='relu')(fc1)
+            z_matrix = tf.reshape(fc2, [self.batchsize, 8, 8, 32])
+            dc1 = Conv2DTranspose(filters=16,kernel_size=(3, 3),strides=2, padding = 'same',activation='relu')(z_matrix)
+            dc2 = Conv2DTranspose(filters=3,kernel_size=(3, 3),strides=2, padding = 'same',activation='sigmoid')(dc1)
+        return dc2
 
     def train(self):
-        guessedtwos =[]
-        guessedones =[]
-        guessedzeros = []
         candd=catsanddogs()
-        samples = candd.data()
+        samples = candd.data
         print('The length of the training samples are', len(samples))
-        visualization, labels = self.mnist.train.next_batch(self.batchsize)
-        gtind = np.argmax(labels, axis=1)
-        reshaped_vis = visualization.reshape(self.batchsize,28,28)
-        ims("results/base.jpg",merge(reshaped_vis[:64],[8,8]))
         # train
-        saver = tf.train.Saver(max_to_keep=2)
+        merged_summary_op = tf.summary.merge_all()
         with tf.Session() as sess:
-            sess.run(tf.initialize_all_variables())
-            for epoch in range(25):
+            sess.run(tf.global_variables_initializer())
+            writer = tf.summary.FileWriter('logs', graph=sess.graph)
+            for epoch in range(1000):
+                count = 0
                 for idx in range(100):
-                    
-                    batch, labels = self.mnist.train.next_batch(self.batchsize)
-                    gtind = np.argmax(labels, axis=1)
-                    _, gen_loss, lat_loss = sess.run((self.optimizer, self.generation_loss, self.latent_loss), feed_dict={self.images: batch})
-                    # dumb hack to print cost every epoch
-                    if idx % (self.n_samples - 3) == 0:
-                        print "epoch %d: genloss %f latloss %f" % (epoch, np.mean(gen_loss), np.mean(lat_loss))
-                        saver.save(sess, os.getcwd()+"/training/train",global_step=epoch)
-                        generated_test, guessedz = sess.run([self.generated_images,self.guessed_z], feed_dict={self.images: visualization})
-                        generated_test = generated_test.reshape(self.batchsize,28,28)
-                        #print('The size of guessedz is', (guessedz.shape))
-                        #print('The labels are', gtind)
-                        for k in range(0,self.batchsize):
-                            if gtind[k]==0:
-                                guessedzeros.append(guessedz[k])
-                            if gtind[k]==1:
-                                guessedones.append(guessedz[k])
-                            if gtind[k]==2:
-                                guessedtwos.append(guessedz[k])
-                            
-                        ims("results/"+str(epoch)+"_"+str(self.n_z)+".jpg",merge(generated_test[:64],[8,8]))
-                        #print('The latent variables of zeros are')
-                        #print(guessedzeros)
-                        #print('The latent variables of ones are')
-                        #print(guessedones)
-                        guessedzerox = []
-                        guessedzeroy = []
-                        guessedonex = []
-                        guessedoney = []
-                        guessedtwox = []
-                        guessedtwoy = []
-                        for z in range(0,len(guessedzeros)):
-                            guessedzerox.append(guessedzeros[z][0])
-                            guessedzeroy.append(guessedzeros[z][1])
-                        for z in range(0,len(guessedones)):
-                            guessedonex.append(guessedones[z][0])
-                            guessedoney.append(guessedones[z][1])
-                        for z in range(0,len(guessedtwos)):
-                            guessedtwox.append(guessedtwos[z][0])
-                            guessedtwoy.append(guessedtwos[z][1])
-                        plt.plot(guessedzerox, guessedzeroy, 'ro')
-                        plt.plot(guessedonex, guessedoney, 'go')
-                        #plt.plot(guessedtwox, guessedtwoy, 'bo')
-                        plt.title(str(epoch))
-                        plt.savefig("results/"+str(epoch)+"latentplots"+".png")
-                        guessedzerox = []
-                        guessedzeroy = []
-                        guessedonex = []
-                        guessedoney = []
-                        guessedones =[]
-                        guessedzeros = []
-                        guessedtwox = []
-                        guessedtwoy = []
-
-
+                    batch = samples[count*100:(count+1)*100]
+                    count = count + 1
+                    _, gen_loss, lat_loss, summaries = sess.run((self.optimizer,self.generation_loss, self.latent_loss, merged_summary_op), feed_dict={self.images: batch})
+                    print('The generator loss is', np.mean(gen_loss))
+                    print('The latent loss is', np.mean(lat_loss))
+               
+                writer.add_summary(summaries,epoch*idx)
 model = LatentAttention()
 model.train()

@@ -10,7 +10,8 @@ class model():
 
 class catsanddogs():
     def __init__(self):
-        imgs,cls,encs = load_training_data()
+        maybe_download_and_extract()
+        imgs,cls = load_training_data()
         cats = []
         dogs = []
         self.data=[]
@@ -33,8 +34,6 @@ def main():
     data = catsanddogs()
     candd = data.getdata()
     print('The number of samples are', len(candd))
-    plt.imshow(candd[105])
-    plt.show()    
 if __name__ == "__main__":
     # execute only if run as a script
     main()

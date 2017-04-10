@@ -8,6 +8,6 @@ def merge(images, size):
     for idx, image in enumerate(images):
         i = idx % size[1]
         j = idx / size[1]
-        img[j*h:j*h+h, i*w:i*w+w] = image
+        img[int(j*h):int(j*h+h), int(i*w):int(i*w+w)] = image
 
     return img

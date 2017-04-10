@@ -49,19 +49,13 @@ def maybe_download_and_extract(url, download_dir):
     """
     Download and extract the data if it doesn't already exist.
     Assumes the url is a tar-ball file.
-
     :param url:
         Internet URL for the tar-file to download.
         Example: "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
-
     :param download_dir:
         Directory where the downloaded file is saved.
         Example: "data/CIFAR-10/"
-
-    :return:
-        Nothing.
     """
-
     # Filename for saving the file downloaded from the internet.
     # Use the filename from the URL and add it to the download_dir.
     filename = url.split('/')[-1]

@@ -1,16 +1,17 @@
 import tensorflow as tf
 import numpy as np
-import input_data
+#import input_data
+from tensorflow.examples.tutorials.mnist import input_data
 import matplotlib.pyplot as plt
 import os
 from scipy.misc import imsave as ims
 from utils import *
 from ops import *
-from CIFAR.cifarDataLoader import maybe_download_and_extract
+#from CIFAR.cifarDataLoader import maybe_download_and_extract
 
 class LatentAttention():
     def __init__(self):
-        maybe_download_and_extract()
+        #maybe_download_and_extract()
         self.mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
         self.n_samples = self.mnist.train.num_examples
 
@@ -64,7 +65,7 @@ class LatentAttention():
         visualization, labels = self.mnist.train.next_batch(self.batchsize)
         gtind = np.argmax(labels, axis=1)
         reshaped_vis = visualization.reshape(self.batchsize,28,28)
-        ims("results/base.jpg",merge(reshaped_vis[:64],[8,8]))
+        #ims("results/base.jpg",merge(reshaped_vis[:64],[8,8]))
         # train
         saver = tf.train.Saver(max_to_keep=2)
         with tf.Session() as sess:
@@ -72,11 +73,10 @@ class LatentAttention():
             for epoch in range(10):
                 for idx in range(int(self.n_samples / self.batchsize)):
                     batch = self.mnist.train.next_batch(self.batchsize)[0]
-                    print(len(batch))
                     _, gen_loss, lat_loss = sess.run((self.optimizer, self.generation_loss, self.latent_loss), feed_dict={self.images: batch})
                     # dumb hack to print cost every epoch
                     if idx % (self.n_samples - 3) == 0:
-                        print "epoch %d: genloss %f latloss %f" % (epoch, np.mean(gen_loss), np.mean(lat_loss))
+                        print ("epoch %d: genloss %f latloss %f" % (epoch, np.mean(gen_loss), np.mean(lat_loss)))
                         saver.save(sess, os.getcwd()+"/training/train",global_step=epoch)
                         generated_test, guessedz = sess.run([self.generated_images,self.guessed_z], feed_dict={self.images: visualization})
                         generated_test = generated_test.reshape(self.batchsize,28,28)
@@ -90,7 +90,7 @@ class LatentAttention():
                             if gtind[k]==2:
                                 guessedtwos.append(guessedz[k])
                             
-                        ims("results/"+str(epoch)+"_"+str(self.n_z)+".jpg",merge(generated_test[:64],[8,8]))
+                        #ims("results/"+str(epoch)+"_"+str(self.n_z)+".jpg",merge(generated_test[:64],[8,8]))
                         #print('The latent variables of zeros are')
                         #print(guessedzeros)
                         #print('The latent variables of ones are')
@@ -110,11 +110,11 @@ class LatentAttention():
                         for z in range(0,len(guessedtwos)):
                             guessedtwox.append(guessedtwos[z][0])
                             guessedtwoy.append(guessedtwos[z][1])
-                        plt.plot(guessedzerox, guessedzeroy, 'ro')
-                        plt.plot(guessedonex, guessedoney, 'go')
+                        #plt.plot(guessedzerox, guessedzeroy, 'ro')
+                        #plt.plot(guessedonex, guessedoney, 'go')
                         #plt.plot(guessedtwox, guessedtwoy, 'bo')
-                        plt.title(str(epoch))
-                        plt.savefig("results/"+str(epoch)+"latentplots"+".png")
+                        #plt.title(str(epoch))
+                        #plt.savefig("results/"+str(epoch)+"latentplots"+".png")
                         guessedzerox = []
                         guessedzeroy = []
                         guessedonex = []

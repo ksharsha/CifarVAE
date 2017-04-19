@@ -37,7 +37,29 @@ class dataloader():
         capacity=min_queue_examples + 3 * self.batch_size,
         min_after_dequeue=min_queue_examples)
         return images
-          
+
+class graddataloader():
+    def __init__(self, datadir, batch_size):
+        self.datadir = datadir
+        self.batch_size = batch_size
+
+    def sampleimages(self):
+        filename_queue = tf.train.string_input_producer(
+             tf.train.match_filenames_once(self.datadir))
+        image_reader = tf.WholeFileReader()
+        _, image_file = image_reader.read(filename_queue)
+        image_orig = tf.image.decode_jpeg(image_file)
+        image = tf.image.resize_images(image_orig, [224, 224])
+        image.set_shape((224, 224, 3))
+        num_preprocess_threads = 1
+        min_queue_examples = 150
+        images = tf.train.shuffle_batch(
+        [image],
+        batch_size=self.batch_size,
+        num_threads=num_preprocess_threads,
+        capacity=min_queue_examples + 3 * self.batch_size,
+        min_after_dequeue=min_queue_examples)
+        return images          
 
 class LatentAttention():
     def __init__(self):
@@ -49,22 +71,31 @@ class LatentAttention():
         self.batchsize = 10
 
         self.images = tf.placeholder(tf.float32, [None, 224,224,3])
+        self.gradients = tf.placeholder(tf.float32, [None, 224,224,3])
         z_mean, z_stddev = self.recognition(self.images)
         samples = tf.random_normal([self.batchsize,self.n_z],0,1,dtype=tf.float32)
         self.guessed_z = z_mean + (z_stddev * samples)
+        self.random_z = tf.random_normal([self.batchsize,self.n_z],0,1,dtype=tf.float32)
 
         self.generated_images = self.generation(self.guessed_z)
+        self.gradient_images = self.gradient(self.guessed_z)
         print('The shape of the generated images are', self.generated_images.shape)
         original_flat = tf.reshape(self.images, [self.batchsize, 224*224*3]) 
         generated_flat = tf.reshape(self.generated_images, [self.batchsize, 224*224*3])
+        gradoriginal_flat = tf.reshape(self.gradients, [self.batchsize, 224*224*3])
+        gradient_flat = tf.reshape(self.gradient_images, [self.batchsize, 224*224*3])
 
         self.generation_loss = (tf.reduce_sum(abs(original_flat - generated_flat),1)) #Added the MSE loss
+        self.gradient_loss = (tf.reduce_sum(abs(gradoriginal_flat - gradient_flat),1)) #Added the MSE loss
         self.latent_loss = 0.5 * tf.reduce_sum(tf.square(z_mean) + tf.square(z_stddev) - tf.log(tf.square(z_stddev)) - 1,1)
         tf.summary.image("Generated Image", self.generated_images, max_outputs=4)
         tf.summary.image("Original Image", self.images, max_outputs=4)
+        tf.summary.image("Gradient Images", self.gradients, max_outputs=4)
+        tf.summary.image("Generated Gradient Images", self.gradient_images, max_outputs=4)
         tf.summary.scalar("GenerationLoss", tf.reduce_mean(self.generation_loss))
+        tf.summary.scalar("GradientGenerationLoss", tf.reduce_mean(self.gradient_loss))
         tf.summary.scalar("latentLoss", tf.reduce_mean(self.latent_loss))
-        self.cost = tf.reduce_mean(self.generation_loss + self.latent_loss)
+        self.cost = tf.reduce_mean(self.generation_loss + self.latent_loss + self.gradient_loss)
         tf.summary.scalar("TotalLoss", self.cost)
         self.optimizer = tf.train.AdamOptimizer(0.0001).minimize(self.cost)
 
@@ -97,9 +128,38 @@ class LatentAttention():
             dc4 = Conv2DTranspose(filters=3,kernel_size=(3, 3),strides=2, padding = 'same',activation='sigmoid')(dc3)
         return dc4
 
-    def train(self):
-        dl = dataloader('/home/ksharsh/project_16824/data/dogs/*.jpg',100)
+    #decoder for the gradient network
+    def gradient(self, z):
+        with tf.variable_scope("generation"):
+            fgc1=Dense(500, activation='relu')(z)
+            fgc2=Dense(14*14*32, activation='relu')(fgc1)
+            zg_matrix = tf.reshape(fgc2, [self.batchsize, 14, 14, 32])
+            gc1 = Conv2DTranspose(filters=64,kernel_size=(3, 3),strides=2, padding = 'same',activation='relu')(zg_matrix)
+            gc2 = Conv2DTranspose(filters=32,kernel_size=(3, 3),strides=2, padding = 'same',activation='relu')(gc1)
+            gc3 = Conv2DTranspose(filters=16,kernel_size=(3, 3),strides=2, padding = 'same',activation='relu')(gc2)
+            gc4 = Conv2DTranspose(filters=3,kernel_size=(3, 3),strides=2, padding = 'same',activation='sigmoid')(gc3)
+        return gc4
+
+    def getimages(self, direc, num):
+        dl = dataloader(direc, num)
         dlsamples = dl.sampleimages()
+        with tf.Session() as sessdata:
+            sessdata.run(tf.global_variables_initializer())
+            coord = tf.train.Coordinator()
+            threads = tf.train.start_queue_runners(coord=coord)
+            samples = sessdata.run([dlsamples])
+            images = samples[0]
+            imagesfloat = deepcopy(images)
+            """Normalizing the images now"""
+            for i in range(images.shape[0]):
+                imagesfloat[i] = np.array(images[i], dtype=float) / 255.0
+            coord.request_stop()
+            coord.join(threads)
+       
+        return imagesfloat
+
+
+    def train(self):
         #candd=catsanddogs()
         #samples = candd.getdata()
         # train
@@ -107,25 +167,20 @@ class LatentAttention():
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
             writer = tf.summary.FileWriter('logsnew', graph=sess.graph)
-            coord = tf.train.Coordinator()
-            threads = tf.train.start_queue_runners(coord=coord)
-            samples = sess.run([dlsamples])
-            images = samples[0]
-            imagesfloat = deepcopy(images)
-            """Normalizing the images now"""
-            for i in range(images.shape[0]):
-                imagesfloat[i] = np.array(images[i], dtype=float) / 255.0 
-            coord.request_stop()
-            coord.join(threads)
+            imagesfloat = self.getimages('/home/ksharsh/project_16824/data/dogs/*.jpg',100)
+            gradimagesfloat = self.getimages('/home/ksharsh/project_16824/data/dogs_grad/*.jpg',100)
             for epoch in range(10000):
                 count = 0
                 for idx in range(10):
                     batch = imagesfloat[count*10:(count+1)*10]
+                    gradbatch = gradimagesfloat[count*10:(count+1)*10]
                     count = count + 1
-                    _, gen_loss, lat_loss, summaries = sess.run((self.optimizer,self.generation_loss, self.latent_loss, merged_summary_op), feed_dict={self.images: batch})
+                    _, grad_loss, gen_loss, lat_loss, summaries = sess.run((self.optimizer,self.gradient_loss,self.generation_loss, self.latent_loss, merged_summary_op), feed_dict={self.images: batch, self.gradients: gradbatch})
                 print('The generator loss is', np.mean(gen_loss))
+                print('The gradient loss is', np.mean(grad_loss))
                 print('The latent loss is', np.mean(lat_loss))
-               
+                
                 writer.add_summary(summaries,epoch)
+
 model = LatentAttention()
 model.train()

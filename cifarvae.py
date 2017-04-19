@@ -13,7 +13,7 @@ from keras.layers import (Activation, Convolution2D,  Dense, Flatten, Input,
 from keras.layers.convolutional import Conv2D, Conv2DTranspose
 from keras.models import Model, Sequential, load_model
 from keras.optimizers import Adam
-
+from copy import deepcopy
 """We will use this class to load images from the directory directly"""
 class dataloader():
     def __init__(self, datadir, batch_size):
@@ -46,7 +46,7 @@ class LatentAttention():
         writer = tf.summary.FileWriter('logsnew', graph=tf.get_default_graph())
         self.n_hidden = 500
         self.n_z = 20
-        self.batchsize = 100
+        self.batchsize = 10
 
         self.images = tf.placeholder(tf.float32, [None, 224,224,3])
         z_mean, z_stddev = self.recognition(self.images)
@@ -100,7 +100,7 @@ class LatentAttention():
     def train(self):
         dl = dataloader('/home/ksharsh/project_16824/data/dogs/*.jpg',100)
         dlsamples = dl.sampleimages()
-        candd=catsanddogs()
+        #candd=catsanddogs()
         #samples = candd.getdata()
         # train
         merged_summary_op = tf.summary.merge_all()
@@ -110,17 +110,22 @@ class LatentAttention():
             coord = tf.train.Coordinator()
             threads = tf.train.start_queue_runners(coord=coord)
             samples = sess.run([dlsamples])
+            images = samples[0]
+            imagesfloat = deepcopy(images)
+            """Normalizing the images now"""
+            for i in range(images.shape[0]):
+                imagesfloat[i] = np.array(images[i], dtype=float) / 255.0 
             coord.request_stop()
             coord.join(threads)
             for epoch in range(10000):
                 count = 0
-                for idx in range(1):
-                    batch = samples[count*100:(count+1)*100]
-                    #count = count + 1
-                    _, gen_loss, lat_loss, summaries = sess.run((self.optimizer,self.generation_loss, self.latent_loss, merged_summary_op), feed_dict={self.images: samples[0]})
+                for idx in range(10):
+                    batch = imagesfloat[count*10:(count+1)*10]
+                    count = count + 1
+                    _, gen_loss, lat_loss, summaries = sess.run((self.optimizer,self.generation_loss, self.latent_loss, merged_summary_op), feed_dict={self.images: batch})
                 print('The generator loss is', np.mean(gen_loss))
                 print('The latent loss is', np.mean(lat_loss))
                
-                writer.add_summary(summaries,epoch*idx)
+                writer.add_summary(summaries,epoch)
 model = LatentAttention()
 model.train()

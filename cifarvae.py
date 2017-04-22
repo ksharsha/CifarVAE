@@ -63,11 +63,11 @@ class graddataloader():
 
 class LatentAttention():
     def __init__(self):
-        maybe_download_and_extract()
+        #maybe_download_and_extract()
         
         writer = tf.summary.FileWriter('logsnew', graph=tf.get_default_graph())
         self.n_hidden = 500
-        self.n_z = 20
+        self.n_z = 512
         self.batchsize = 10
 
         self.images = tf.placeholder(tf.float32, [None, 224,224,3])
@@ -169,7 +169,7 @@ class LatentAttention():
             writer = tf.summary.FileWriter('logsnew', graph=sess.graph)
             imagesfloat = self.getimages('/home/ksharsh/project_16824/data/dogs/*.jpg',100)
             gradimagesfloat = self.getimages('/home/ksharsh/project_16824/data/dogs_grad/*.jpg',100)
-            for epoch in range(10000):
+            for epoch in range(20000):
                 count = 0
                 for idx in range(10):
                     batch = imagesfloat[count*10:(count+1)*10]

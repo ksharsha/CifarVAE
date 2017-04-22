@@ -130,7 +130,7 @@ class LatentAttention():
 
     #decoder for the gradient network
     def gradient(self, z):
-        with tf.variable_scope("generation"):
+        with tf.variable_scope("gradientgeneration"):
             fgc1=Dense(500, activation='relu')(z)
             fgc2=Dense(14*14*32, activation='relu')(fgc1)
             zg_matrix = tf.reshape(fgc2, [self.batchsize, 14, 14, 32])
@@ -162,25 +162,48 @@ class LatentAttention():
     def train(self):
         #candd=catsanddogs()
         #samples = candd.getdata()
-        # train
+        train = True
         merged_summary_op = tf.summary.merge_all()
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
+            saver = tf.train.Saver(max_to_keep=40)
             writer = tf.summary.FileWriter('logsnew', graph=sess.graph)
             imagesfloat = self.getimages('/home/ksharsh/project_16824/data/dogs/*.jpg',100)
             gradimagesfloat = self.getimages('/home/ksharsh/project_16824/data/dogs_grad/*.jpg',100)
+            testimagesfloat = self.getimages('/home/ksharsh/project_16824/data/testdogs/*.jpg',10)
             for epoch in range(20000):
-                count = 0
-                for idx in range(10):
-                    batch = imagesfloat[count*10:(count+1)*10]
-                    gradbatch = gradimagesfloat[count*10:(count+1)*10]
-                    count = count + 1
-                    _, grad_loss, gen_loss, lat_loss, summaries = sess.run((self.optimizer,self.gradient_loss,self.generation_loss, self.latent_loss, merged_summary_op), feed_dict={self.images: batch, self.gradients: gradbatch})
-                print('The generator loss is', np.mean(gen_loss))
-                print('The gradient loss is', np.mean(grad_loss))
-                print('The latent loss is', np.mean(lat_loss))
+                if train:
+                    print("Started Training")
+                    count = 0
+                    for idx in range(10):
+                        batch = imagesfloat[count*10:(count+1)*10]
+                        gradbatch = gradimagesfloat[count*10:(count+1)*10]
+                        count = count + 1
+                        _, grad_loss, gen_loss, lat_loss, summaries = sess.run((self.optimizer,self.gradient_loss,self.generation_loss, self.latent_loss, merged_summary_op), feed_dict={self.images: batch, self.gradients: gradbatch})
+                    print('The generator loss is', np.mean(gen_loss))
+                    print('The gradient loss is', np.mean(grad_loss))
+                    print('The latent loss is', np.mean(lat_loss))
                 
-                writer.add_summary(summaries,epoch)
+                    writer.add_summary(summaries,epoch)
+                    if (epoch % 500 == 0):
+                        saver.save(sess, os.getcwd()+"/training/train",global_step=epoch)
+                        train = False
+
+                else:
+                    print("Testing")
+                    saver.restore(sess, tf.train.latest_checkpoint(os.getcwd()+"/training/"))
+                    testimgs,testgrads = sess.run((self.generated_images, self.gradient_images), feed_dict={self.images: testimagesfloat})
+                    for i in range(10):
+                        ims("testimgs/" + str(epoch) + "recimg" + str(i) + ".jpg", testimgs[i])
+                        ims("testimgs/" + str(epoch) + "recgradimg" + str(i) + ".jpg", testgrads[i])
+                    """Generating from the latent space now"""
+                    randz = np.random.normal(0,1,[10,512])
+                    genimgs,gengrads = sess.run((self.generated_images, self.gradient_images), feed_dict={self.guessed_z : randz})
+                    for i in range(10):
+                        ims("testimgs/" + str(epoch) + "genimg" + str(i) + ".jpg", genimgs[i])
+                        ims("testimgs/" + str(epoch) + "gengradimg" + str(i) + ".jpg", gengrads[i])
+
+                    train = True
 
 model = LatentAttention()
 model.train()

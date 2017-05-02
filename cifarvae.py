@@ -1,19 +1,27 @@
 import tensorflow as tf
 import numpy as np
-import input_data
+#import input_data
 import matplotlib.pyplot as plt
 import os
 from scipy.misc import imsave as ims
+from scipy.misc import imread, imresize
 from ops import *
-from CIFAR.cifarDataLoader import maybe_download_and_extract
-from cifar import catsanddogs
+import glob
+#from CIFAR.cifarDataLoader import maybe_download_and_extract
+#from cifar import catsanddogs
 import keras
+from keras import layers
 from keras.layers import (Activation, Convolution2D,  Dense, Flatten, Input,
                           Permute, Lambda)
+from keras.layers import Activation, Dense, Input, BatchNormalization, Conv2D
+from keras.layers import MaxPooling2D, AveragePooling2D, GlobalAveragePooling2D
+from keras.layers import GlobalMaxPooling2D, ZeroPadding2D, Flatten
+import keras.backend as K
 from keras.layers.convolutional import Conv2D, Conv2DTranspose
 from keras.models import Model, Sequential, load_model
 from keras.optimizers import Adam
 from copy import deepcopy
+from network.blocks import buildblocks
 """We will use this class to load images from the directory directly"""
 class dataloader():
     def __init__(self, datadir, batch_size):
@@ -38,38 +46,144 @@ class dataloader():
         min_after_dequeue=min_queue_examples)
         return images
 
-class graddataloader():
-    def __init__(self, datadir, batch_size):
-        self.datadir = datadir
-        self.batch_size = batch_size
+class sameimageloader():
+    def __init__(self, datadir1, datadir2):
+        self.datadir1 = datadir1
+        self.datadir2 = datadir2
+        print('The data dir1 is', datadir1,self.datadir1)
+        print('The data dir2 is', datadir2,self.datadir2)
 
-    def sampleimages(self):
-        filename_queue = tf.train.string_input_producer(
-             tf.train.match_filenames_once(self.datadir))
-        image_reader = tf.WholeFileReader()
-        _, image_file = image_reader.read(filename_queue)
-        image_orig = tf.image.decode_jpeg(image_file)
-        image = tf.image.resize_images(image_orig, [224, 224])
-        image.set_shape((224, 224, 3))
-        num_preprocess_threads = 1
-        min_queue_examples = 150
-        images = tf.train.shuffle_batch(
-        [image],
-        batch_size=self.batch_size,
-        num_threads=num_preprocess_threads,
-        capacity=min_queue_examples + 3 * self.batch_size,
-        min_after_dequeue=min_queue_examples)
-        return images          
+    def returnimages(self,batchsize):
+        """This function creates a text file of the images in the folder"""
+        images = glob.glob(self.datadir1+"*.jpg")
+        imagenames = deepcopy(images)
+        for i in range(len(images)):
+            impath = images[i]
+            imsplit = impath.split('/')
+            imagenames[i] = imsplit[len(imsplit)-1]
+        if len(imagenames) == 0 :
+            print("No jpg images found, please check the paths")
+            return
+        if batchsize > len(imagenames):
+            print("More images requested than present")
+            return
+    
+        imdir1 = imread(self.datadir1+imagenames[0])
+        imdir1 = imresize(imdir1,(224,224,3))
+        imdir1 = np.array(imdir1, dtype=float) / 255.0
+        imdir1 = imdir1[np.newaxis,...]
+        imdir2 = imread(self.datadir2+imagenames[0])
+        imdir2 = imresize(imdir2,(224,224,3))
+        imdir2 = np.array(imdir2, dtype=float) / 255.0
+        imdir2 = imdir2[np.newaxis,...]
+        for i in range(batchsize):
+            if((os.path.exists(self.datadir1 + imagenames[i+1])==False or os.path.exists(self.datadir2 + imagenames[i+1])==False)):
+                batchsize = batchsize+1
+                print("This image doesn't exist in both the folders", imagenames[i+1])
+                continue
+            newim1 = imread(self.datadir1 + imagenames[i+1])
+            newim2 = imread(self.datadir2 + imagenames[i+1])
+            newim1 = imresize(newim1,(224,224,3))
+            newim1 = np.array(newim1, dtype=float) / 255.0
+            newim1 = newim1[np.newaxis,...]
+            newim2 = imresize(newim2,(224,224,3))
+            newim2 = np.array(newim2, dtype=float) / 255.0
+            newim2 = newim2[np.newaxis,...]
+            imdir1 = np.concatenate((imdir1,newim1), axis=0)
+            imdir2 = np.concatenate((imdir2,newim2), axis=0)
+
+        return imdir1, imdir2
+
+class blocks():
+    def __init__(self):
+        pass
+
+    def conv_block(self, input_tensor, kernel_size, filters, stage, block, strides=(2, 2)):
+        """conv_block is the block that has a conv layer at shortcut
+        # Arguments
+        input_tensor: input tensor
+        kernel_size: defualt 3, the kernel size of middle conv layer at main path
+        filters: list of integers, the filterss of 3 conv layer at main path
+        stage: integer, current stage label, used for generating layer names
+        block: 'a','b'..., current block label, used for generating layer names
+        # Returns
+        Output tensor for the block.
+        Note that from stage 3, the first conv layer at main path is with strides=(2,2)
+        And the shortcut should have strides=(2,2) as well
+        """
+        filters1, filters2, filters3 = filters
+        if K.image_data_format() == 'channels_last':
+            bn_axis = 3
+        else:
+            bn_axis = 1
+        conv_name_base = 'res' + str(stage) + block + '_branch'
+        bn_name_base = 'bn' + str(stage) + block + '_branch'
+
+        x = Conv2D(filters1, (1, 1), strides=strides,
+                   name=conv_name_base + '2a')(input_tensor)
+        x = BatchNormalization(axis=bn_axis, name=bn_name_base + '2a')(x)
+        x = Activation('relu')(x)
+
+        x = Conv2D(filters2, kernel_size, padding='same',
+                   name=conv_name_base + '2b')(x)
+        x = BatchNormalization(axis=bn_axis, name=bn_name_base + '2b')(x)
+        x = Activation('relu')(x)
+
+        x = Conv2D(filters3, (1, 1), name=conv_name_base + '2c')(x)
+        x = BatchNormalization(axis=bn_axis, name=bn_name_base + '2c')(x)
+
+        shortcut = Conv2D(filters3, (1, 1), strides=strides,
+                          name=conv_name_base + '1')(input_tensor)
+        shortcut = BatchNormalization(axis=bn_axis, name=bn_name_base + '1')(shortcut)
+
+        x = layers.add([x, shortcut])
+        x = Activation('relu')(x)
+        return x
+
+
+    def identity_block(self, input_tensor, kernel_size, filters, stage, block):
+        """The identity block is the block that has no conv layer at shortcut.
+        # Arguments
+        input_tensor: input tensor
+        kernel_size: defualt 3, the kernel size of middle conv layer at main path
+        filters: list of integers, the filterss of 3 conv layer at main path
+        stage: integer, current stage label, used for generating layer names
+        block: 'a','b'..., current block label, used for generating layer names
+        # Returns
+        Output tensor for the block.
+        """
+        filters1, filters2, filters3 = filters
+        if K.image_data_format() == 'channels_last':
+            bn_axis = 3
+        else:
+            bn_axis = 1
+        conv_name_base = 'res' + str(stage) + block + '_branch'
+        bn_name_base = 'bn' + str(stage) + block + '_branch'
+
+        x = Conv2D(filters1, (1, 1), name=conv_name_base + '2a')(input_tensor)
+        x = BatchNormalization(axis=bn_axis, name=bn_name_base + '2a')(x)
+        x = Activation('relu')(x)
+
+        x = Conv2D(filters2, kernel_size,
+               padding='same', name=conv_name_base + '2b')(x)
+        x = BatchNormalization(axis=bn_axis, name=bn_name_base + '2b')(x)
+        x = Activation('relu')(x)
+
+        x = Conv2D(filters3, (1, 1), name=conv_name_base + '2c')(x)
+        x = BatchNormalization(axis=bn_axis, name=bn_name_base + '2c')(x)
+
+        x = layers.add([x, input_tensor])
+        x = Activation('relu')(x)
+        return x
 
 class LatentAttention():
     def __init__(self):
         #maybe_download_and_extract()
-        
         writer = tf.summary.FileWriter('logsnew', graph=tf.get_default_graph())
+        K.set_learning_phase(True)
         self.n_hidden = 500
         self.n_z = 512
         self.batchsize = 10
-
         self.images = tf.placeholder(tf.float32, [None, 224,224,3])
         self.gradients = tf.placeholder(tf.float32, [None, 224,224,3])
         z_mean, z_stddev = self.recognition(self.images)
@@ -102,7 +216,7 @@ class LatentAttention():
 
     # encoder
     def recognition(self, input_images):
-        with tf.variable_scope("recognition"):
+        with tf.variable_scope("recognitionold"):
             input_shapes=(224,224,3)
             inputs = Input(shape=input_shapes)
             model = Sequential()
@@ -115,6 +229,51 @@ class LatentAttention():
             w_mean = Dense(self.n_z)(fc1)
             w_stddev = Dense(self.n_z)(fc1) 
         return w_mean, w_stddev
+ 
+    def recognitionold(self, input_images):
+        with tf.variable_scope("recognition"):
+            input_shape = (224,224,3)
+
+            #if input_tensor is None:
+            img_input = Input(shape=input_shape)
+            #By default the number of axes has to be three
+            bn_axis = 3
+
+            #Creating the model now
+            block = blocks()
+            x = ZeroPadding2D((3, 3))(input_images)
+            x = Conv2D(64, (7, 7), strides=(2, 2), name='conv1')(x)
+            x = BatchNormalization(axis=bn_axis, name='bn_conv1')(x)
+            x = Activation('relu')(x)
+            x = MaxPooling2D((3, 3), strides=(2, 2))(x)
+
+            x = block.conv_block(x, 3, [64, 64, 256], stage=2, block='a', strides=(1, 1))
+            x = block.identity_block(x, 3, [64, 64, 256], stage=2, block='b')
+            x = block.identity_block(x, 3, [64, 64, 256], stage=2, block='c')
+
+            x = block.conv_block(x, 3, [128, 128, 512], stage=3, block='a')
+            x = block.identity_block(x, 3, [128, 128, 512], stage=3, block='b')
+            x = block.identity_block(x, 3, [128, 128, 512], stage=3, block='c')
+            x = block.identity_block(x, 3, [128, 128, 512], stage=3, block='d')
+
+            x = block.conv_block(x, 3, [256, 256, 1024], stage=4, block='a')
+            x = block.identity_block(x, 3, [256, 256, 1024], stage=4, block='b')
+            x = block.identity_block(x, 3, [256, 256, 1024], stage=4, block='c')
+            x = block.identity_block(x, 3, [256, 256, 1024], stage=4, block='d')
+            x = block.identity_block(x, 3, [256, 256, 1024], stage=4, block='e')
+            x = block.identity_block(x, 3, [256, 256, 1024], stage=4, block='f')
+
+            x = block.conv_block(x, 3, [512, 512, 2048], stage=5, block='a')
+            x = block.identity_block(x, 3, [512, 512, 2048], stage=5, block='b')
+            x = block.identity_block(x, 3, [512, 512, 2048], stage=5, block='c')
+
+            x = AveragePooling2D((7, 7), name='avg_pool')(x)
+            x = Flatten()(x)
+            x = Dense(512, activation='softmax', name='fc200')(x)        
+            w_mean = Dense(self.n_z)(x)
+            w_stddev = Dense(self.n_z)(x)
+
+        return w_mean, w_stddev 
 
     # decoder
     def generation(self, z):
@@ -164,14 +323,19 @@ class LatentAttention():
         #samples = candd.getdata()
         train = True
         merged_summary_op = tf.summary.merge_all()
+        imloader = sameimageloader('/home/mscvproject/users/harsha/data/dogs/','/home/mscvproject/users/harsha/data/dogs_grad/')
+        imagesfloat, gradimagesfloat = imloader.returnimages(100)
+        print('The size of the images 1 are', imagesfloat.shape)
+        print('The size of the images 2 are', gradimagesfloat.shape)
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
             saver = tf.train.Saver(max_to_keep=40)
             writer = tf.summary.FileWriter('logsnew', graph=sess.graph)
-            imagesfloat = self.getimages('/home/ksharsh/project_16824/data/dogs/*.jpg',100)
-            gradimagesfloat = self.getimages('/home/ksharsh/project_16824/data/dogs_grad/*.jpg',100)
-            testimagesfloat = self.getimages('/home/ksharsh/project_16824/data/testdogs/*.jpg',10)
+            #imagesfloat = self.getimages('/home/mscvproject/users/harsha/data/dogs/*.jpg',100)
+            #gradimagesfloat = self.getimages('/home/mscvproject/users/harsha/data/dogs_grad/*.jpg',100)
+            testimagesfloat = self.getimages('/home/mscvproject/users/harsha/data/testdogs/*.jpg',10)
             for epoch in range(20000):
+                K.set_learning_phase(train)
                 if train:
                     print("Started Training")
                     count = 0

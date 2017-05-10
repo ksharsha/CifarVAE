@@ -8,7 +8,7 @@ Also, the cifar data loader is already present in the code itself and you can us
 I have trained this on imagenet dogs and below are some of the results.
 
 ![Alt text](results/genimg0.jpg?raw=true "Reconstructed Image")
-![Alt text](results/origimg0.jpg?raw=true "Original Image")
+![Alt text](results/origimg0.png?raw=true "Original Image")
 
 I have also added the tensorboard support where in the reconstruction loss, latent loss etc get written every epoch and can be visualized using tensorboard.
 

@@ -1,11 +1,9 @@
 import tensorflow as tf
 import numpy as np
-#import input_data
 import matplotlib.pyplot as plt
 import os
 from scipy.misc import imsave as ims
 from scipy.misc import imread, imresize
-from ops import *
 import glob
 #from CIFAR.cifarDataLoader import maybe_download_and_extract
 #from cifar import catsanddogs
